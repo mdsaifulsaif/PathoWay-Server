@@ -1,0 +1,4 @@
+node_modules
+.env
+pathoway-admin.json
+db

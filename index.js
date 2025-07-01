@@ -1,0 +1,334 @@
+const express = require("express");
+const cors = require("cors");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+
+require("dotenv").config();
+// import dotenv from "dotenv";
+// dotenv.config();
+
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+const admin = require("firebase-admin");
+const serviceAccount = require("./pathoway-admin.json");
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+}
+console.log(" Firebase Admin Initialized:", !!admin.apps.length);
+
+const verifyFirebaseToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization; // fixed to lowercase
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Unauthorized: No token" });
+  }
+
+  const idToken = authHeader.split(" ")[1];
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    req.user = decodedToken;
+
+    //  Log token info to be sure
+    // console.log("Firebase Decoded Token:");
+    // console.log({
+    //   uid: decodedToken.uid,
+    //   email: decodedToken.email,
+    //   provider: decodedToken.firebase?.sign_in_provider,
+    //   issuedAt: new Date(decodedToken.iat * 1000).toLocaleString(),
+    // });
+
+    next();
+  } catch (error) {
+    console.error(" Firebase token verification failed:", error.message);
+    res.status(403).json({ message: "Forbidden: Invalid token" });
+  }
+};
+
+// // Routes
+// const parcelRoutes = require("./routes/parcelRoutes");
+// app.use("/api/parcels", parcelRoutes);
+
+const uri = "mongodb://127.0.0.1:27017";
+
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
+});
+
+// const verifyFirebaseToken = async (req, res, next) => {
+//   const authHeader = req.headers.Authorization;
+
+//   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+//     return res.status(401).json({ message: "Unauthorized: No token" });
+//   }
+
+//   const idToken = authHeader.split(" ")[1];
+
+//   try {
+//     const decodedToken = await admin.auth().verifyIdToken(idToken);
+//     req.user = decodedToken; // you can access uid, email, etc.
+//     console.log(decodedToken);
+//     next();
+//   } catch (error) {
+//     console.error("Firebase token verification failed:", error);
+//     res.status(403).json({ message: "Forbidden: Invalid token" });
+//   }
+// };
+
+async function run() {
+  try {
+    // await client.connect();
+
+    const database = client.db("pathoway");
+    const userColletion = database.collection("users");
+    const parcelCollection = database.collection("parcel");
+    const paymentsCollection = database.collection("payments");
+    const ridersCollection = database.collection("riders");
+
+    // my apis
+    app.post("/parcels", async (req, res) => {
+      const parcel = req.body;
+      const result = await parcelCollection.insertOne(parcel);
+      res.send(result);
+    });
+
+    //get percel by email
+    // routes/parcels.js or inside your main server file
+    app.get("/myparcels", verifyFirebaseToken, async (req, res) => {
+      // console.log("myparcel token", req.headers);
+      const email = req.query.email;
+      const decodedEmail = req.user?.email;
+
+      //  Compare decoded email with query email
+      if (decodedEmail !== email) {
+        return res.status(403).json({ message: "Forbidden: Email mismatch" });
+      }
+
+      try {
+        const query = { userEmail: email }; // বা "email" যদি আপনার ডেটায় সেই key থাকে
+
+        const parcels = await parcelCollection.find(query).toArray(); // cursor → array
+
+        res.send(parcels);
+      } catch (error) {
+        console.error(" Error fetching parcels:", error.message);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // viw parcel
+    app.get("/parcel/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid parcel ID" });
+        }
+
+        const query = { _id: new ObjectId(id) };
+        const parcel = await parcelCollection.findOne(query);
+
+        if (!parcel) {
+          return res.status(404).send({ message: "Parcel not found" });
+        }
+
+        res.send(parcel);
+      } catch (error) {
+        console.error("❌ Error fetching parcel:", error.message);
+        res.status(500).send({ message: "Server error", error: error.message });
+      }
+    });
+    //delete parcel
+    app.delete("/parcel/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid parcel ID" });
+        }
+
+        const query = { _id: new ObjectId(id) };
+        const result = await parcelCollection.deleteOne(query);
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: "Parcel not found" });
+        }
+
+        res.send({ message: "Parcel deleted successfully" });
+      } catch (error) {
+        console.error(" Error deleting parcel:", error.message);
+        res.status(500).send({ message: "Server error", error: error.message });
+      }
+    });
+
+    // api pyment id
+    app.get("/pparcel/:id", async (req, res) => {
+      const { id } = req.params;
+
+      try {
+        const parcel = await parcelCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!parcel) {
+          return res.status(404).json({ message: "Parcel not found" });
+        }
+
+        res.json(parcel);
+      } catch (error) {
+        console.error("Error fetching parcel by ID:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // payment instant
+    app.post("/create-payment-intent", async (req, res) => {
+      const amountInCents = req.body.amountInCents;
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amountInCents, // amount in cents
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+        res.json({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // : Handle Successful Payment
+    // POST /api/payment-success
+    // Body: { parcelId, transactionId, amount, userEmail }
+
+    app.post("/payment-success", async (req, res) => {
+      const { parcelId, transactionId, amount, userEmail } = req.body;
+
+      try {
+        // const parcels = db.collection("parcels");
+
+        // 1. Mark parcel as paid
+        const updated = await parcelCollection.updateOne(
+          { _id: new ObjectId(parcelId) },
+          { $set: { paymentStatus: "paid", transactionId } }
+        );
+
+        // 2. Insert into payment history
+        const paymentData = {
+          parcelId: new ObjectId(parcelId),
+          transactionId,
+          userEmail,
+          amount,
+          paymentStatus: "paid",
+          paid_at_string: new Date().toISOString(),
+          paidAt: new Date(),
+        };
+
+        const result = await paymentsCollection.insertOne(paymentData);
+
+        res.json({
+          message: "Payment recorded successfully",
+          paymentId: result.insertedId,
+        });
+      } catch (err) {
+        console.error("Payment update failed:", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // GET /api/payments
+
+    app.get("/payments", verifyFirebaseToken, async (req, res) => {
+      try {
+        // const payments = db.collection("payments");
+
+        // You can add admin auth check here if needed
+        const userEmail = req.query.email;
+        const decodedEmail = req.user?.email;
+
+        //  Compare decoded email with query email
+        if (decodedEmail !== userEmail) {
+          return res.status(403).json({ message: "Forbidden: Email mismatch" });
+        }
+
+        const history = await paymentsCollection
+          .find({ userEmail: userEmail })
+          .sort({ paidAt: -1 }) // descending order (latest first)
+          .toArray();
+
+        res.json(history);
+      } catch (err) {
+        console.error("Error fetching payment history:", err);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // POST /api/users
+    app.post("/users", async (req, res) => {
+      const userData = req.body;
+      const { email } = req.body;
+
+      // optional: check if user already exists
+      const exists = await userColletion.findOne({ email });
+      if (exists)
+        return res.status(200).json({ message: "User already exists" });
+
+      const result = await userColletion.insertOne(userData);
+      res.status(201).json({ message: "User added", id: result.insertedId });
+    });
+
+    app.post("/riders", async (req, res) => {
+      try {
+        const rider = req.body;
+        console.log(" New Rider Request:", rider);
+
+        if (!rider?.email || !rider?.name) {
+          return res.status(400).json({ message: "Missing required fields" });
+        }
+
+        const exists = await ridersCollection.findOne({ email: rider.email });
+        if (exists) {
+          return res.status(409).json({ message: "Rider already exists" });
+        }
+
+        const result = await ridersCollection.insertOne(rider);
+        res.status(201).json({
+          message: "Rider added successfully",
+          id: result.insertedId,
+        });
+      } catch (error) {
+        console.error(" Failed to add rider:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // ------------------------------------
+
+    await client.db("admin").command({ ping: 1 });
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!"
+    );
+  } finally {
+    // Ensures that the client will close when you finish/error
+  }
+}
+run().catch(console.dir);
+
+app.get("/", (req, res) => {
+  res.send("pathoway server is running");
+});
+
+app.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
+});
