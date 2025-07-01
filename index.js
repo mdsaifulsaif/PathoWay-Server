@@ -337,17 +337,65 @@ async function run() {
     });
 
     // accept riders
+    // app.put("/riders/:id", async (req, res) => {
+    //   const id = req.params.id;
+    //   const filter = { _id: new ObjectId(id) };
+    //   const updateData = req.body;
+    //   console.log(updateData);
+    //   console.log(updateData.email);
+
+    //   // change rider status
+    //   const updateDoc = {
+    //     $set: {
+    //       status: updateData.status,
+    //     },
+    //   };
+    //   const riderResult = await ridersCollection.updateOne(filter, updateDoc);
+
+    //   //  change user role
+    //   const userFilter = { email: updateData.email };
+    //   const updateUserRole = {
+    //     $set: {
+    //       role: "rider",
+    //     },
+    //   };
+
+    //   const userRole = await userColletion.updateOne(
+    //     userFilter,
+    //     updateUserRole
+    //   );
+
+    //   res.send({
+    //     riderUpdate: riderResult,
+    //     userUpdate: userRole,
+    //   });
+    // });
     app.put("/riders/:id", async (req, res) => {
-      const id = req.params.id;
-      const filter = { _id: new ObjectId(id) };
-      const updateData = req.body;
+      try {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updateData = req.body;
 
-      const updateDoc = {
-        $set: updateData,
-      };
+        const updateDoc = { $set: { status: updateData.status } };
+        const riderResult = await ridersCollection.updateOne(filter, updateDoc);
 
-      const result = await ridersCollection.updateOne(filter, updateDoc);
-      res.send(result);
+        // Check if email exists before user update
+        if (!updateData.email) {
+          return res
+            .status(400)
+            .send({ error: "Email is required to update user role." });
+        }
+
+        const userResult = await userColletion.updateOne(
+          { email: updateData.email },
+          { $set: { role: "rider" } }
+        );
+
+        res.send({ riderResult, userResult });
+      } catch (err) {
+        console.error("Update rider error:", err);
+        res.status(500).send({ error: "Internal Server Error" });
+      }
     });
 
     // DELETE - Remove rider by ID
