@@ -291,18 +291,19 @@ async function run() {
     app.post("/riders", async (req, res) => {
       try {
         const rider = req.body;
-        console.log(" New Rider Request:", rider);
 
-        if (!rider?.email || !rider?.name) {
-          return res.status(400).json({ message: "Missing required fields" });
-        }
+        const ridersinfo = { ...rider, status: "pending" };
 
-        const exists = await ridersCollection.findOne({ email: rider.email });
-        if (exists) {
-          return res.status(409).json({ message: "Rider already exists" });
-        }
+        // if (!rider?.email || !rider?.name) {
+        //   return res.status(400).json({ message: "Missing required fields" });
+        // }
 
-        const result = await ridersCollection.insertOne(rider);
+        // const exists = await ridersCollection.findOne({ email: rider.email });
+        // if (exists) {
+        //   return res.status(409).json({ message: "Rider already exists" });
+        // }
+
+        const result = await ridersCollection.insertOne(ridersinfo);
         res.status(201).json({
           message: "Rider added successfully",
           id: result.insertedId,
@@ -310,6 +311,62 @@ async function run() {
       } catch (error) {
         console.error(" Failed to add rider:", error);
         res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // pending riders
+    app.get("/riders", async (req, res) => {
+      try {
+        const pendingRiders = await ridersCollection
+          .find({ status: "pending" }) // Only where status is "pending"
+          .toArray();
+        res.send(pendingRiders);
+      } catch (error) {
+        console.error("Error fetching pending riders:", error);
+        res.status(500).send({ error: "Failed to fetch pending riders" });
+      }
+    });
+
+    // GET - Get single rider by ID
+    app.get("/riders/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await ridersCollection.findOne(query);
+
+      res.send(result);
+    });
+
+    // accept riders
+    app.put("/riders/:id", async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updateData = req.body;
+
+      const updateDoc = {
+        $set: updateData,
+      };
+
+      const result = await ridersCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
+    // DELETE - Remove rider by ID
+    app.delete("/riders/:id", async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const result = await ridersCollection.deleteOne(filter);
+      res.send(result);
+    });
+
+    app.get("/acceptriders", async (req, res) => {
+      try {
+        const pendingRiders = await ridersCollection
+          .find({ status: "accepted" }) // ✅ Only where status is "pending"
+          .toArray();
+        res.send(pendingRiders);
+      } catch (error) {
+        console.error("Error fetching pending riders:", error);
+        res.status(500).send({ error: "Failed to fetch pending riders" });
       }
     });
 
