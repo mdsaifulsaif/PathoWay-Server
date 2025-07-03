@@ -366,6 +366,30 @@ async function run() {
       }
     });
 
+    // PATCH: Assign rider to parcel
+    app.patch("/parcels/:id/assign", async (req, res) => {
+      const { id } = req.params;
+      const { riderId } = req.body;
+      console.log(id, riderId);
+
+      try {
+        const result = await parcelCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              assignedRider: new ObjectId(riderId),
+              status: "assigned",
+            },
+          }
+        );
+
+        res.send(result);
+      } catch (error) {
+        console.error("Failed to assign rider:", error);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // admin api
     // GET all users
     app.get("/users", async (req, res) => {
@@ -439,7 +463,7 @@ async function run() {
     });
 
     // GET /parcels?paymentStatus=paid&status=pending
-    app.get("/parcels", verifyFirebaseToken, async (req, res) => {
+    app.get("/assign-parcels", async (req, res) => {
       const { paymentStatus, status } = req.query;
 
       const query = {
@@ -449,6 +473,67 @@ async function run() {
 
       const result = await parcelCollection.find(query).toArray();
       res.send(result);
+    });
+
+    // avelavil rider
+    // app
+    //   .get("/assigned-rider", (req, res) => {
+    //     console.log(req.query);
+    //   })
+    app.get("/assigned-rider", async (req, res) => {
+      const { region, warehouse } = req.query;
+      console.log(region, warehouse);
+
+      const query = {
+        ...(region && { region }),
+        ...(warehouse && { warehouse }),
+      };
+
+      const riders = await ridersCollection.find(query).toArray();
+      res.send(riders);
+    });
+
+    // app.put("/assign-parcel/:id", async (req, res) => {
+    //   const id = req.params.id;
+    //   const { riderId, riderName, delivery_status } = req.body;
+    //   console.log(delivery_status);
+
+    //   const filter = { _id: new ObjectId(id) };
+    //   const updateDoc = {
+    //     $set: {
+    //       status: "assigned",
+    //       delivery_status: delivery_status,
+    //       assignedRider: {
+    //         id: riderId,
+    //         name: riderName,
+    //       },
+    //     },
+    //   };
+
+    //   const result = await parcelCollection.updateOne(filter, updateDoc);
+    //   res.send(result);
+    // });
+    app.put("/assign-parcel/:id", async (req, res) => {
+      try {
+        const parcelId = req.params.id;
+        const { riderId, riderName } = req.body;
+        console.log(riderId, riderName);
+
+        const filter = { _id: new ObjectId(parcelId) };
+        const updateDoc = {
+          $set: {
+            riderId: riderId,
+            riderName: riderName,
+            delivery_status: "in_transit", // ✅ delivery status update
+          },
+        };
+
+        const result = await parcelCollection.updateOne(filter, updateDoc);
+        res.send(result);
+      } catch (err) {
+        console.error("Assign error:", err);
+        res.status(500).send({ error: "Failed to assign rider" });
+      }
     });
 
     // ------------------------------------
