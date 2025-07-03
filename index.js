@@ -1,3 +1,4 @@
+// const express = require("express");
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -66,26 +67,6 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
-
-// const verifyFirebaseToken = async (req, res, next) => {
-//   const authHeader = req.headers.Authorization;
-
-//   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-//     return res.status(401).json({ message: "Unauthorized: No token" });
-//   }
-
-//   const idToken = authHeader.split(" ")[1];
-
-//   try {
-//     const decodedToken = await admin.auth().verifyIdToken(idToken);
-//     req.user = decodedToken; // you can access uid, email, etc.
-//     console.log(decodedToken);
-//     next();
-//   } catch (error) {
-//     console.error("Firebase token verification failed:", error);
-//     res.status(403).json({ message: "Forbidden: Invalid token" });
-//   }
-// };
 
 async function run() {
   try {
@@ -337,39 +318,6 @@ async function run() {
     });
 
     // accept riders
-    // app.put("/riders/:id", async (req, res) => {
-    //   const id = req.params.id;
-    //   const filter = { _id: new ObjectId(id) };
-    //   const updateData = req.body;
-    //   console.log(updateData);
-    //   console.log(updateData.email);
-
-    //   // change rider status
-    //   const updateDoc = {
-    //     $set: {
-    //       status: updateData.status,
-    //     },
-    //   };
-    //   const riderResult = await ridersCollection.updateOne(filter, updateDoc);
-
-    //   //  change user role
-    //   const userFilter = { email: updateData.email };
-    //   const updateUserRole = {
-    //     $set: {
-    //       role: "rider",
-    //     },
-    //   };
-
-    //   const userRole = await userColletion.updateOne(
-    //     userFilter,
-    //     updateUserRole
-    //   );
-
-    //   res.send({
-    //     riderUpdate: riderResult,
-    //     userUpdate: userRole,
-    //   });
-    // });
     app.put("/riders/:id", async (req, res) => {
       try {
         const id = req.params.id;
@@ -416,6 +364,91 @@ async function run() {
         console.error("Error fetching pending riders:", error);
         res.status(500).send({ error: "Failed to fetch pending riders" });
       }
+    });
+
+    // admin api
+    // GET all users
+    app.get("/users", async (req, res) => {
+      const users = await userColletion.find().toArray();
+      res.send(users);
+    });
+
+    // GET /users/role?email=user@example.com
+    app.get("/users/role", async (req, res) => {
+      const email = req.query.email;
+
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+      }
+
+      try {
+        const user = await userColletion.findOne({ email });
+
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        res.json({ role: user.role }); // e.g., "admin", "rider", "user"
+      } catch (error) {
+        console.error("Error fetching user role:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // PATCH role with support for reverting to previous role
+    app.patch("/users/:id/role", async (req, res) => {
+      const { id } = req.params;
+
+      // Find the current user
+      const user = await userColletion.findOne({ _id: new ObjectId(id) });
+
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      let updatedRole;
+      let updateFields = {};
+
+      if (user.role === "admin") {
+        // Revert to previous role
+        updatedRole = user.prevRole || "user"; // fallback to user
+        updateFields = {
+          $set: { role: updatedRole },
+          $unset: { prevRole: "" }, // remove prevRole
+        };
+      } else {
+        // Promote to admin and store current role
+        updatedRole = "admin";
+        updateFields = {
+          $set: {
+            role: "admin",
+            prevRole: user.role,
+          },
+        };
+      }
+
+      const result = await userColletion.updateOne(
+        { _id: new ObjectId(id) },
+        updateFields
+      );
+
+      res.send({
+        modifiedCount: result.modifiedCount,
+        newRole: updatedRole,
+      });
+    });
+
+    // GET /parcels?paymentStatus=paid&status=pending
+    app.get("/parcels", verifyFirebaseToken, async (req, res) => {
+      const { paymentStatus, status } = req.query;
+
+      const query = {
+        ...(paymentStatus && { paymentStatus }),
+        ...(status && { status }),
+      };
+
+      const result = await parcelCollection.find(query).toArray();
+      res.send(result);
     });
 
     // ------------------------------------
