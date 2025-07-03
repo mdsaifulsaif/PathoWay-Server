@@ -462,13 +462,13 @@ async function run() {
       });
     });
 
-    // GET /parcels?paymentStatus=paid&status=pending
+    // GET /parcels?paymentStatus=paid&delivery_status=pending
     app.get("/assign-parcels", async (req, res) => {
-      const { paymentStatus, status } = req.query;
+      const { paymentStatus, delivery_status } = req.query;
 
       const query = {
         ...(paymentStatus && { paymentStatus }),
-        ...(status && { status }),
+        ...(delivery_status && { delivery_status }),
       };
 
       const result = await parcelCollection.find(query).toArray();
@@ -476,13 +476,8 @@ async function run() {
     });
 
     // avelavil rider
-    // app
-    //   .get("/assigned-rider", (req, res) => {
-    //     console.log(req.query);
-    //   })
     app.get("/assigned-rider", async (req, res) => {
       const { region, warehouse } = req.query;
-      console.log(region, warehouse);
 
       const query = {
         ...(region && { region }),
@@ -493,47 +488,62 @@ async function run() {
       res.send(riders);
     });
 
-    // app.put("/assign-parcel/:id", async (req, res) => {
-    //   const id = req.params.id;
-    //   const { riderId, riderName, delivery_status } = req.body;
-    //   console.log(delivery_status);
-
-    //   const filter = { _id: new ObjectId(id) };
-    //   const updateDoc = {
-    //     $set: {
-    //       status: "assigned",
-    //       delivery_status: delivery_status,
-    //       assignedRider: {
-    //         id: riderId,
-    //         name: riderName,
-    //       },
-    //     },
-    //   };
-
-    //   const result = await parcelCollection.updateOne(filter, updateDoc);
-    //   res.send(result);
-    // });
+    // after send parcel rider update delevery status
     app.put("/assign-parcel/:id", async (req, res) => {
       try {
         const parcelId = req.params.id;
         const { riderId, riderName } = req.body;
-        console.log(riderId, riderName);
 
         const filter = { _id: new ObjectId(parcelId) };
         const updateDoc = {
           $set: {
             riderId: riderId,
             riderName: riderName,
-            delivery_status: "in_transit", // ✅ delivery status update
+            delivery_status: "rider_assign", // ✅ delivery status update
+            // delivery_status: "in_transit",
           },
         };
 
         const result = await parcelCollection.updateOne(filter, updateDoc);
         res.send(result);
       } catch (err) {
-        console.error("Assign error:", err);
         res.status(500).send({ error: "Failed to assign rider" });
       }
+    });
+
+    // // Get rider's parcels in_transit parcels
+    app.get("/rider-pending-parcel", async (req, res) => {
+      const { email } = req.query;
+
+      const query = {
+        userEmail: email,
+        delivery_status: { $in: ["rider_assign", "picked_up"] },
+      };
+      const deliveries = await parcelCollection.find(query).toArray();
+      res.send(deliveries);
+    });
+
+    // parcel pickup api
+    app.put("/pickup/:id", async (req, res) => {
+      const id = req.params.id;
+      const { delivery_status } = req.body;
+
+      const result = await parcelCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { delivery_status } }
+      );
+
+      res.send(result);
+    });
+
+    // percel deliver api
+    app.put("/deliver/:id", async (req, res) => {
+      const id = req.params.id;
+      await parcelCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { delivery_status: "delivered" } }
+      );
+      res.send({ message: "Parcel delivered" });
     });
 
     // ------------------------------------
