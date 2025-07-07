@@ -38,15 +38,6 @@ const verifyFirebaseToken = async (req, res, next) => {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     req.user = decodedToken;
 
-    //  Log token info to be sure
-    // console.log("Firebase Decoded Token:");
-    // console.log({
-    //   uid: decodedToken.uid,
-    //   email: decodedToken.email,
-    //   provider: decodedToken.firebase?.sign_in_provider,
-    //   issuedAt: new Date(decodedToken.iat * 1000).toLocaleString(),
-    // });
-
     next();
   } catch (error) {
     console.error(" Firebase token verification failed:", error.message);
@@ -90,17 +81,20 @@ async function run() {
     app.get("/myparcels", verifyFirebaseToken, async (req, res) => {
       // console.log("myparcel token", req.headers);
       const email = req.query.email;
-      const decodedEmail = req.user?.email;
+      // const decodedEmail = req.user?.email;
 
-      //  Compare decoded email with query email
-      if (decodedEmail !== email) {
-        return res.status(403).json({ message: "Forbidden: Email mismatch" });
-      }
+      // //  Compare decoded email with query email
+      // if (decodedEmail !== email) {
+      //   return res.status(403).json({ message: "Forbidden: Email mismatch" });
+      // }
 
       try {
         const query = { userEmail: email }; // বা "email" যদি আপনার ডেটায় সেই key থাকে
 
-        const parcels = await parcelCollection.find(query).toArray(); // cursor → array
+        const parcels = await parcelCollection
+          .find(query)
+          .sort({ creation_date: -1 })
+          .toArray(); // cursor → array
 
         res.send(parcels);
       } catch (error) {
@@ -318,31 +312,38 @@ async function run() {
     });
 
     // accept riders
+
+    // Accept rider and update user role
     app.put("/riders/:id", async (req, res) => {
+      const { id } = req.params;
+
       try {
-        const id = req.params.id;
-        const filter = { _id: new ObjectId(id) };
-        const updateData = req.body;
+        // Step 1: Find rider from ridersCollection using ID
+        const rider = await ridersCollection.findOne({ _id: new ObjectId(id) });
 
-        const updateDoc = { $set: { status: updateData.status } };
-        const riderResult = await ridersCollection.updateOne(filter, updateDoc);
-
-        // Check if email exists before user update
-        if (!updateData.email) {
-          return res
-            .status(400)
-            .send({ error: "Email is required to update user role." });
+        if (!rider) {
+          return res.status(404).send({ error: "Rider not found" });
         }
 
-        const userResult = await userColletion.updateOne(
-          { email: updateData.email },
+        // Step 2: Update rider status to accepted
+        await ridersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: "accepted" } }
+        );
+
+        // Step 3: Update user role to "rider" in users collection using rider.email
+        const result = await userColletion.updateOne(
+          { email: rider.email },
           { $set: { role: "rider" } }
         );
 
-        res.send({ riderResult, userResult });
-      } catch (err) {
-        console.error("Update rider error:", err);
-        res.status(500).send({ error: "Internal Server Error" });
+        res.send({
+          message: "Rider accepted and user role updated to rider",
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("Error accepting rider:", error);
+        res.status(500).send({ error: "Something went wrong" });
       }
     });
 
@@ -492,14 +493,15 @@ async function run() {
     app.put("/assign-parcel/:id", async (req, res) => {
       try {
         const parcelId = req.params.id;
-        const { riderId, riderName } = req.body;
+        const { riderId, riderName, riderEmail } = req.body;
 
         const filter = { _id: new ObjectId(parcelId) };
         const updateDoc = {
           $set: {
             riderId: riderId,
             riderName: riderName,
-            delivery_status: "rider_assign", // ✅ delivery status update
+            riderEmail: riderEmail,
+            delivery_status: "rider_assign", // delivery status update
             // delivery_status: "in_transit",
           },
         };
@@ -544,6 +546,92 @@ async function run() {
         { $set: { delivery_status: "delivered" } }
       );
       res.send({ message: "Parcel delivered" });
+    });
+
+    app.get("/dashboard/summary", async (req, res) => {
+      try {
+        // Parcel Stats Aggregate
+        const parcelStats = await parcelCollection
+          .aggregate([
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                pending: {
+                  $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
+                },
+                delivered: {
+                  $sum: {
+                    $cond: [{ $eq: ["$delivery_status", "delivered"] }, 1, 0],
+                  },
+                },
+                paid: {
+                  $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0] },
+                },
+                totalIncome: {
+                  $sum: {
+                    $cond: [{ $eq: ["$paymentStatus", "paid"] }, "$cost", 0],
+                  },
+                },
+              },
+            },
+          ])
+          .toArray();
+
+        // Rider Stats Aggregate
+        const riderStats = await ridersCollection
+          .aggregate([
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                free: {
+                  $sum: { $cond: [{ $eq: ["$work_status", "free"] }, 1, 0] },
+                },
+                accepted: {
+                  $sum: { $cond: [{ $eq: ["$status", "accepted"] }, 1, 0] },
+                },
+              },
+            },
+          ])
+          .toArray();
+
+        // User Stats Aggregate
+        const userStats = await userColletion
+          .aggregate([
+            {
+              $group: {
+                _id: "$role",
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        const userFormatted = {
+          total: userStats.reduce((sum, r) => sum + r.count, 0),
+          admin: userStats.find((r) => r._id === "admin")?.count || 0,
+          rider: userStats.find((r) => r._id === "rider")?.count || 0,
+          user: userStats.find((r) => r._id === "user")?.count || 0,
+        };
+
+        res.send({
+          parcel: parcelStats[0] || {},
+          rider: riderStats[0] || {},
+          user: userFormatted,
+        });
+      } catch (error) {
+        console.error("❌ Dashboard summary error:", error);
+        res.status(500).send({ error: "Failed to load dashboard summary" });
+      }
+    });
+
+    app.get("/parcels", async (req, res) => {
+      const { riderEmail } = req.query;
+      const query = { riderEmail: riderEmail };
+      // const query = riderEmail ? { riderEmail } : {};
+      const result = await parcelCollection.find(query).toArray();
+      res.send(result);
     });
 
     // ------------------------------------
